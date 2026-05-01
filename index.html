@@ -126,7 +126,8 @@
       const processParsedRows = (rows, type) => {
         return rows.map(row => {
           const compKey = findKey(row, ['사업장', '사업체', '회사']);
-          const locKey = findKey(row, ['장소', '작업위치', '단위작업', '부서', '공정', '위치']);
+          
+          const locKey = findKey(row, ['공정', '공정명', '단위작업장소', '장소', '작업위치', '단위작업', '부서', '위치']);
           const agentKey = findKey(row, ['인자', '유해인자', '측정물질', '물질명', '대상물질', '항목', '소음', '화학']);
           const limitKey = findKey(row, ['기준', '노출기준', '법적기준', '허용기준']);
           const valKey = findKey(row, ['측정치', '결과', '값', 'TWA', '금회', '농도', '평가']);
@@ -383,8 +384,7 @@
         else if (type === 'text') { w = 120; h = 40; text = '텍스트 입력'; baseColor = 'transparent'; } 
         else if (type === 'line-h') { w = 200; h = 1; text = ''; baseColor = '#000000'; } 
         else if (type === 'line-v') { w = 5; h = 200; text = ''; baseColor = '#000000'; } 
-        // ★ 추가된 투명 사각형 (테두리만 있는 도형)
-        else if (type === 'border-rect') { w = 150; h = 100; text = '투명 구역'; baseColor = 'transparent'; } 
+        else if (type === 'border-rect') { w = 180; h = 120; text = '투명공정명'; baseColor = 'transparent'; } 
 
         const newEl = {
           id: generateId(),
@@ -469,7 +469,6 @@
         return `'${yy}${half}' ${title} 도면.${ext}`;
       };
 
-      // ★ JPEG 저장 시 잘림(Truncation) 방지를 위한 최적화
       const handleSaveJpeg = async () => {
         const pageEl = document.getElementById(`page-${activePageId}`); 
         if (!pageEl) return alert('도면 영역을 찾을 수 없습니다.');
@@ -774,21 +773,20 @@
                 </h2>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => addElement('rect')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
-                    <div className="w-6 h-6 border-2 border-gray-600"></div>
-                    <span className="text-xs font-medium text-gray-700">공정 (3단 표)</span>
+                    <div className="w-6 h-6 border-2 border-gray-600 bg-white"></div>
+                    <span className="text-xs font-medium text-gray-700">공정 (3단표)</span>
                   </button>
                   <button onClick={() => addElement('circle')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
-                    <div className="w-6 h-6 border-2 border-gray-600 rounded-full"></div>
+                    <div className="w-6 h-6 border-2 border-gray-600 rounded-full bg-white"></div>
                     <span className="text-xs font-medium text-gray-700">원형 포인트</span>
                   </button>
                   <button onClick={() => addElement('office')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
                     <div className="w-full h-4 border border-gray-400 bg-gray-100 mb-1"></div>
                     <span className="text-xs font-medium text-gray-700">사무실 구역</span>
                   </button>
-                  {/* ★ 새로 추가된 투명 사각형 (테두리 구역) */}
                   <button onClick={() => addElement('border-rect')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
                     <div className="w-6 h-6 border-2 border-gray-600 bg-transparent"></div>
-                    <span className="text-xs font-medium text-gray-700">투명 사각형(테두리)</span>
+                    <span className="text-xs font-medium text-gray-700">투명 공정 (3단표)</span>
                   </button>
                   <button onClick={() => addElement('door')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
                     <div className="w-6 h-1 bg-black"></div>
@@ -828,7 +826,45 @@
                       const reader = new FileReader();
                       reader.onload = (event) => {
                         const base64 = event.target.result;
-                        setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: base64 } : p));
+                        
+                        // ★ 이미지 프로세싱: 회색 그리드선 및 빨간색 텍스트 강력 제거 로직
+                        const img = new Image();
+                        img.onload = () => {
+                          const canvas = document.createElement('canvas');
+                          canvas.width = img.width;
+                          canvas.height = img.height;
+                          const ctx = canvas.getContext('2d');
+                          ctx.drawImage(img, 0, 0);
+                          
+                          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                          const data = imageData.data;
+                          
+                          for (let i = 0; i < data.length; i += 4) {
+                            const r = data[i];
+                            const g = data[i+1];
+                            const b = data[i+2];
+                            const avg = (r + g + b) / 3;
+                            
+                            // 빨간색 텍스트 식별 (R이 G, B보다 25 이상 크고 기본 밝기가 70 이상인 경우)
+                            const isRed = (r - g > 25) && (r - b > 25) && r > 70;
+                            
+                            // 밝기 150 이상(흰 배경 및 옅은 회색 그리드선) 이거나 빨간색 텍스트면 완전 투명하게 삭제
+                            if (avg > 150 || isRed) {
+                              data[i+3] = 0; 
+                            } else if (avg < 80) {
+                              // ★ 진한 검은색(선 및 텍스트)은 투명도를 주지 않고 100% 진하게 유지하여 선명도 극대화
+                              data[i+3] = 255;
+                            } else {
+                              // 중간 밝기(경계선, 안티앨리어싱) 부분만 부드럽게 처리
+                              data[i+3] = Math.max(0, 255 - ((avg - 80) * (255 / 70)));
+                            }
+                          }
+                          ctx.putImageData(imageData, 0, 0);
+                          const transparentBase64 = canvas.toDataURL('image/png');
+                          
+                          setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: transparentBase64 } : p));
+                        };
+                        img.src = base64;
                       };
                       reader.readAsDataURL(file);
                       e.target.value = null; 
@@ -836,7 +872,7 @@
                   />
                   <button onClick={() => document.getElementById('bg-image-upload').click()} className="w-full bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-bold py-2 rounded transition flex justify-center items-center shadow-sm">
                     <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
-                    이미지 업로드 (JPG, PNG)
+                    이미지 업로드 (선만 추출)
                   </button>
                   {pages.find(p => p.id === activePageId)?.bgImage && (
                     <button onClick={() => setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: null } : p))} className="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-bold py-1.5 rounded transition flex justify-center items-center mt-1">
@@ -844,7 +880,9 @@
                     </button>
                   )}
                 </div>
-                <p className="text-[0.65rem] text-gray-500 mt-2 leading-tight">페이지별로 원하시는 평면도를 배경으로 깔 수 있습니다.</p>
+                <p className="text-[0.6rem] text-gray-500 mt-2 leading-tight">
+                  ※ 업로드된 이미지에서 <b>흰 배경, 회색 그리드선, 빨간 텍스트</b>는 자동으로 완벽히 지워집니다. 남은 뼈대 위에 <b>[투명 공정]</b>을 올려 작업하세요.
+                </p>
               </div>
 
               {/* 노출 수준 범례 패널 */}
@@ -917,7 +955,7 @@
               </div>
             </div>
 
-            {/* 도면 캔버스 영역 (A4 사이즈 최적화) */}
+            {/* 도면 캔버스 영역 */}
             <div 
               className="flex-1 overflow-auto p-4 md:p-8 w-full print-area flex flex-col items-center" 
               onPointerDown={() => setSelectedElementId(null)} 
@@ -962,7 +1000,7 @@
 
                     {page.elements.map(el => {
                       const isSelected = selectedElementId === el.id;
-                      const isProcessNode = el.type === 'rect' || el.type === 'circle';
+                      const isProcessNode = el.type === 'rect' || el.type === 'circle' || el.type === 'border-rect';
                       const isLinked = Boolean(isProcessNode && el.linkedLocation && analyzedLocations[el.linkedLocation]);
                       const isLine = el.type === 'line-h' || el.type === 'line-v';
                       
@@ -973,16 +1011,14 @@
 
                       if (isProcessNode) {
                         bgColor = isLinked ? 'rgba(255, 255, 255, 0.95)' : '#e5e7eb';
+                        if (el.type === 'border-rect') {
+                          bgColor = 'transparent';
+                          borderColor = '#000000';
+                        }
                       } else if (el.type === 'door' || isLine) {
                         bgColor = '#000000'; 
                         borderStyle = 'none';
                         borderWidth = '0px';
-                      } else if (el.type === 'border-rect') {
-                        // ★ 새롭게 추가된 투명 사각형 테두리 속성
-                        bgColor = 'transparent';
-                        borderStyle = 'solid';
-                        borderWidth = '2px';
-                        borderColor = '#000000';
                       } else if (el.type === 'text') {
                         bgColor = 'transparent'; 
                         borderStyle = 'none';
@@ -1012,24 +1048,22 @@
                               borderRadius: borderRadius,
                             }}
                           >
-                            {/* ★ 3단 표 레이아웃 (JPEG 저장 시 잘림 현상을 완벽 차단하는 상단 밀착 구조) */}
+                            {/* 3단 표 레이아웃 */}
                           {isLinked ? (
                             <div className="w-full h-full flex flex-col items-stretch justify-between">
                               
-                              {/* 1단 (공정명) - items-start로 상단 정렬, pb-[6px]로 하단 여백 확보 */}
                               <div 
-                                className="w-full flex items-start justify-center text-center font-bold text-gray-900 bg-gray-100 border-b border-gray-400 px-1 shrink-0 overflow-hidden"
-                                style={{ flex: `0 0 ${el.row1Ratio ?? 30}%`, fontSize: `${el.fontSize || 14}px`, wordBreak: 'keep-all' }}
+                                className="w-full flex items-start justify-center text-center font-bold text-gray-900 border-b border-gray-400 px-1 shrink-0 overflow-hidden"
+                                style={{ flex: `0 0 ${el.row1Ratio ?? 30}%`, fontSize: `${el.fontSize || 14}px`, wordBreak: 'keep-all', backgroundColor: el.type === 'border-rect' ? 'transparent' : '#f3f4f6' }}
                               >
-                                <span className="block w-full pt-[1px] pb-[6px] leading-[1.1]">{String(el.text)}</span>
+                                <span className="block w-full pt-[1px] pb-[8px] leading-[1.1]">{String(el.text)}</span>
                               </div>
                               
-                              {/* 2단 (측정기호) - 동일하게 상단 밀착 정렬 */}
                               <div 
-                                className="w-full flex items-start justify-center text-center font-bold text-[#ff0000] border-b border-gray-300 bg-white px-1 shrink-0 overflow-hidden"
-                                style={{ flex: `0 0 ${el.row2Ratio ?? 20}%`, fontSize: `${Math.max(8, (el.fontSize || 14) * 0.75)}px`, wordBreak: 'break-all' }}
+                                className="w-full flex items-start justify-center text-center font-bold text-[#ff0000] border-b border-gray-300 px-1 shrink-0 overflow-hidden"
+                                style={{ flex: `0 0 ${el.row2Ratio ?? 20}%`, fontSize: `${Math.max(8, (el.fontSize || 14) * 0.75)}px`, wordBreak: 'break-all', backgroundColor: el.type === 'border-rect' ? 'transparent' : '#ffffff' }}
                               >
-                                <span className="block w-full pt-[1px] pb-[6px] leading-[1.1]">
+                                <span className="block w-full pt-[1px] pb-[8px] leading-[1.1]">
                                 {el.symbolText 
                                   ? String(el.symbolText) 
                                   : (analyzedLocations[el.linkedLocation]?.pointSummary 
@@ -1038,7 +1072,6 @@
                                 </span>
                               </div>
                               
-                              {/* 3단 (유해인자 노출수준) */}
                               <div 
                                 className="w-full flex flex-col items-stretch justify-start overflow-hidden"
                                 style={{ flex: `1 1 ${el.row3Ratio ?? 50}%` }}
@@ -1056,7 +1089,7 @@
                                           minHeight: '14px'
                                         }}
                                       >
-                                        <span className="block w-full pt-[1px] pb-[6px] leading-[1.1] truncate text-center">{String(cat)}</span>
+                                        <span className="block w-full pt-[1px] pb-[8px] leading-[1.1] truncate text-center">{String(cat)}</span>
                                       </div>
                                     );
                                   })}
@@ -1066,7 +1099,7 @@
                             ) : (
                               !isLine && (
                                 <span 
-                                  className="text-center font-bold text-gray-900 px-1 whitespace-pre-wrap block w-full pt-[1px] pb-[6px] leading-[1.1]"
+                                  className="text-center font-bold text-gray-900 px-1 whitespace-pre-wrap block w-full pt-[1px] pb-[8px] leading-[1.1]"
                                   style={{ fontSize: `${el.fontSize || 14}px`, color: el.type === 'door' ? 'transparent' : 'inherit', wordBreak: 'keep-all' }}
                                 >
                                   {String(el.text)}
@@ -1086,7 +1119,7 @@
                     })}
                   </div>
 
-                  {/* --- 푸터 (줄바꿈 및 잘림 완벽 방지) --- */}
+                  {/* --- 푸터 --- */}
                   <div className="flex flex-col justify-end z-20 shrink-0 mt-2 overflow-visible">
                     <div className="text-gray-900 font-bold flex flex-col gap-1.5 w-full" style={{ fontSize: '0.75rem' }}>
                       <p className="whitespace-normal break-keep">※ 측정대상 부서의 평면도를 그리고 단위작업장소별 측정위치를 표시한다.</p>
@@ -1140,7 +1173,7 @@
                 {/* 텍스트 설정 */}
                 {(selectedElement.type !== 'line-h' && selectedElement.type !== 'line-v') && (
                   <div className="border-t border-gray-200 pt-4">
-                    <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">표시 텍스트</h3>
+                    <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">표시 텍스트 (공정명)</h3>
                     <textarea 
                       value={selectedElement.text} 
                       onChange={e => updateSelectedElement({ text: e.target.value })}
@@ -1148,7 +1181,7 @@
                       rows="2"
                     />
                     
-                    {(selectedElement.type === 'rect' || selectedElement.type === 'circle') && (
+                    {(selectedElement.type === 'rect' || selectedElement.type === 'circle' || selectedElement.type === 'border-rect') && (
                       <div className="mt-3">
                         <label className="block text-[0.7rem] text-gray-600 mb-1 font-bold text-red-600">측정기호 (2째줄 빨간글씨 수정)</label>
                         <input 
@@ -1187,8 +1220,8 @@
                   </div>
                 )}
 
-                {/* 3단 표 비율 수동 조절 (공정 도형인 경우만) */}
-                {(selectedElement.type === 'rect' || selectedElement.type === 'circle') && (
+                {/* 3단 표 비율 수동 조절 */}
+                {(selectedElement.type === 'rect' || selectedElement.type === 'circle' || selectedElement.type === 'border-rect') && (
                   <div className="border-t border-gray-200 pt-4">
                     <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">3단 표 내부 비율 조절 (%)</h3>
                     <div className="flex gap-2">
@@ -1208,8 +1241,8 @@
                   </div>
                 )}
 
-                {/* 데이터 연동 (공정 도형인 경우만) */}
-                {(selectedElement.type === 'rect' || selectedElement.type === 'circle') && (
+                {/* 데이터 연동 */}
+                {(selectedElement.type === 'rect' || selectedElement.type === 'circle' || selectedElement.type === 'border-rect') && (
                   <div className="border-t border-gray-200 pt-4 bg-blue-50/50 -mx-5 px-5 pb-4">
                     <h3 className="text-xs font-bold text-blue-800 uppercase mb-2 flex items-center">
                       <svg className="w-3.5 h-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"></path></svg>
