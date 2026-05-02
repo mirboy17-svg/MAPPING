@@ -111,6 +111,8 @@
       
       const [manualTitle, setManualTitle] = useState('( 측정장소 )'); 
       const [orientation, setOrientation] = useState('portrait');
+      
+      const [showLegend, setShowLegend] = useState(false);
 
       const [activeCategories, setActiveCategories] = useState(
         AGENT_CATEGORIES.reduce((acc, cat) => ({ ...acc, [cat]: true }), {})
@@ -122,7 +124,6 @@
 
       const fileInputRef = useRef(null);
 
-      // --- 추출된 Row 데이터를 통합 규격으로 파싱하는 공통 함수 ---
       const processParsedRows = (rows, type) => {
         return rows.map(row => {
           const compKey = findKey(row, ['사업장', '사업체', '회사']);
@@ -168,7 +169,6 @@
         }).filter(d => d && d.hasData && d.agent !== '미상' && !d.isExcluded);
       };
 
-      // --- 데이터 로드 및 분석 ---
       const fetchAndParse = (urlStr, type) => {
         if (!urlStr || typeof urlStr !== 'string') return Promise.resolve([]);
 
@@ -381,7 +381,9 @@
         else if (type === 'rect') { w = 180; text = '공정명'; }
         else if (type === 'circle') { w = 160; h = 160; text = '공정명(원형)'; } 
         else if (type === 'office') { w = 200; h = 100; text = '사무실'; baseColor = '#f3f4f6'; }
-        else if (type === 'text') { w = 120; h = 40; text = '텍스트 입력'; baseColor = 'transparent'; } 
+        else if (type === 'text') { w = 120; h = 40; text = '자유 텍스트'; baseColor = 'transparent'; } 
+        else if (type === 'text-red') { w = 80; h = 30; text = '*P1'; baseColor = 'transparent'; } 
+        else if (type === 'company-name') { w = 200; h = 40; text = '< 0000 >'; baseColor = 'transparent'; } 
         else if (type === 'line-h') { w = 200; h = 1; text = ''; baseColor = '#000000'; } 
         else if (type === 'line-v') { w = 5; h = 200; text = ''; baseColor = '#000000'; } 
         else if (type === 'border-rect') { w = 180; h = 120; text = '투명공정명'; baseColor = 'transparent'; } 
@@ -466,29 +468,21 @@
         const half = now.getMonth() < 6 ? '상반기' : '하반기'; 
         const title = manualTitle ? manualTitle : '( 측정장소 )'; 
         
-        // 확장자 앞에 suffix(_P1, _P2 등)를 붙여서 반환
         return `'${yy}${half}' ${title} 도면${suffix}.${ext}`;
       };
 
       const handleSaveJpeg = async () => {
-        // 현재 보고 있던 페이지 아이디 백업
         const originalPageId = activePageId;
         
         try {
-          // 생성된 모든 페이지를 순회하며 순차적으로 캡처 및 다운로드 진행
           for (let i = 0; i < pages.length; i++) {
             const page = pages[i];
-            
-            // 1. 해당 페이지로 화면 전환 (React 상태 갱신)
             setActivePageId(page.id);
-            
-            // 2. 브라우저가 화면을 완전히 그릴 수 있도록 300ms 대기 (매우 중요)
             await new Promise(resolve => setTimeout(resolve, 300));
             
             const pageEl = document.getElementById(`page-${page.id}`); 
             if (!pageEl) continue;
             
-            // 3. 고해상도 캡처
             const canvas = await window.html2canvas(pageEl, { 
               scale: 2, 
               backgroundColor: '#ffffff', 
@@ -502,22 +496,18 @@
               windowHeight: document.documentElement.scrollHeight
             });
             
-            // 4. 이미지 다운로드 트리거
             const link = document.createElement('a');
-            // 페이지가 2개 이상일 때만 파일명 뒤에 _P1, _P2를 붙임
             const suffix = pages.length > 1 ? `_P${i + 1}` : '';
             link.download = getDynamicFileName('jpg', suffix); 
             link.href = canvas.toDataURL('image/jpeg', 1.0); 
             link.click();
             
-            // 브라우저의 다중 다운로드 스팸 차단을 막기 위해 다운로드 사이마다 대기
             await new Promise(resolve => setTimeout(resolve, 300));
           }
         } catch (err) {
           console.error(err);
           alert('JPEG 이미지 저장 중 오류가 발생했습니다.');
         } finally {
-          // 작업이 완료되면 사용자가 원래 보고 있던 페이지로 복구
           setActivePageId(originalPageId);
         }
       };
@@ -577,7 +567,8 @@
           manualTitle,
           orientation,
           activeCategories,
-          urls
+          urls,
+          showLegend // 범례 설정값도 JSON에 함께 저장
         };
         const blob = new Blob([JSON.stringify(dataToSave)], {type: "application/json"});
         const link = document.createElement('a');
@@ -601,6 +592,7 @@
             if (data.orientation) setOrientation(data.orientation);
             if (data.activeCategories) setActiveCategories(data.activeCategories);
             if (data.urls) setUrls(data.urls);
+            if (data.showLegend !== undefined) setShowLegend(data.showLegend); // 범례 상태 복원
             
             setPages(prevPages => prevPages.map(page => ({
               ...page,
@@ -775,19 +767,27 @@
                 )}
               </div>
 
-              {/* 2. 유해인자 필터 패널 */}
+              {/* 2. 유해인자 필터 패널 & 범례 설정 */}
               <div className="p-4 border-b border-gray-200">
                 <h2 className="text-sm font-bold text-gray-800 mb-3 flex items-center">
                   <span className="bg-blue-600 text-white w-5 h-5 rounded-full inline-flex justify-center items-center text-xs mr-2">2</span>
                   도면에 표시할 인자 선택
                 </h2>
-                <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="grid grid-cols-2 gap-2 text-xs mb-4">
                   {AGENT_CATEGORIES.map(cat => (
                     <label key={cat} className="flex items-center space-x-2 cursor-pointer">
                       <input type="checkbox" checked={activeCategories[cat]} onChange={() => setActiveCategories({...activeCategories, [cat]: !activeCategories[cat]})} className="rounded text-blue-600 focus:ring-blue-500" />
                       <span className="text-gray-700 truncate">{String(cat)}</span>
                     </label>
                   ))}
+                </div>
+                
+                {/* ★ 하단 노출 수준 범례 토글 스위치 */}
+                <div className="pt-3 border-t border-gray-200">
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" checked={showLegend} onChange={(e) => setShowLegend(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
+                    <span className="text-gray-800 font-bold text-xs">도면 하단 노출 수준 범례 표시</span>
+                  </label>
                 </div>
               </div>
 
@@ -799,36 +799,45 @@
                 </h2>
                 <div className="grid grid-cols-2 gap-2">
                   <button onClick={() => addElement('rect')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
-                    <div className="w-6 h-6 border-2 border-gray-600 bg-white"></div>
-                    <span className="text-xs font-medium text-gray-700">공정 (3단표)</span>
+                    <div className="w-6 h-6 border-[1.5px] border-gray-600 bg-white"></div>
+                    <span className="text-xs font-semibold text-gray-700">공정 (3단표)</span>
                   </button>
                   <button onClick={() => addElement('circle')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
-                    <div className="w-6 h-6 border-2 border-gray-600 rounded-full bg-white"></div>
-                    <span className="text-xs font-medium text-gray-700">원형 포인트</span>
+                    <div className="w-6 h-6 border-[1.5px] border-gray-600 rounded-full bg-white"></div>
+                    <span className="text-xs font-semibold text-gray-700">원형 포인트</span>
                   </button>
                   <button onClick={() => addElement('office')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
-                    <div className="w-full h-4 border border-gray-400 bg-gray-100 mb-1"></div>
-                    <span className="text-xs font-medium text-gray-700">사무실 구역</span>
+                    <div className="w-full h-4 border-[1.5px] border-gray-400 bg-gray-100 mb-1"></div>
+                    <span className="text-xs font-semibold text-gray-700">사무실 구역</span>
                   </button>
                   <button onClick={() => addElement('border-rect')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
-                    <div className="w-6 h-6 border-2 border-gray-600 bg-transparent"></div>
-                    <span className="text-xs font-medium text-gray-700">투명 공정 (3단표)</span>
+                    <div className="w-6 h-6 border-[1.5px] border-gray-600 bg-transparent"></div>
+                    <span className="text-xs font-semibold text-gray-700">투명 공정 (3단표)</span>
+                  </button>
+                  {/* 사업체명 입력 전용 도형 */}
+                  <button onClick={() => addElement('company-name')} className="p-2 border border-blue-300 rounded hover:bg-blue-50 flex flex-col items-center justify-center gap-1 transition bg-blue-50/30">
+                    <div className="w-12 h-5 flex items-center justify-center text-[0.45rem] font-semibold text-blue-600 tracking-tighter">&lt;0000&gt;</div>
+                    <span className="text-xs font-semibold text-blue-700">사업체명 도형</span>
                   </button>
                   <button onClick={() => addElement('door')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
                     <div className="w-6 h-1 bg-black"></div>
-                    <span className="text-xs font-medium text-gray-700">출입문/벽면</span>
+                    <span className="text-xs font-semibold text-gray-700">출입문/벽면</span>
                   </button>
-                  <button onClick={() => addElement('text')} className="p-2 border border-gray-300 rounded hover:bg-blue-50 flex flex-col items-center justify-center gap-1 transition bg-blue-50/50">
-                    <span className="font-serif font-bold text-lg leading-none text-blue-700">T</span>
-                    <span className="text-xs font-bold text-blue-700">자유 텍스트</span>
+                  <button onClick={() => addElement('text')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition bg-gray-50">
+                    <span className="font-serif font-semibold text-lg leading-none text-gray-700">T</span>
+                    <span className="text-xs font-semibold text-gray-700">자유 텍스트</span>
+                  </button>
+                  <button onClick={() => addElement('text-red')} className="p-2 border border-red-300 rounded hover:bg-red-50 flex flex-col items-center justify-center gap-1 transition bg-red-50/30">
+                    <span className="font-serif font-semibold text-lg leading-none text-red-600">T</span>
+                    <span className="text-xs font-semibold text-red-600">빨간 텍스트(기호)</span>
                   </button>
                   <button onClick={() => addElement('line-h')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
                     <div className="w-8 h-[1px] bg-black"></div>
-                    <span className="text-xs font-medium text-gray-700">가로선 (구분선)</span>
+                    <span className="text-xs font-semibold text-gray-700">가로선 (구분선)</span>
                   </button>
                   <button onClick={() => addElement('line-v')} className="p-2 border border-gray-300 rounded hover:bg-gray-50 flex flex-col items-center justify-center gap-1 transition">
                     <div className="w-[5px] h-6 bg-black"></div>
-                    <span className="text-xs font-medium text-gray-700">세로선 (구분선)</span>
+                    <span className="text-xs font-semibold text-gray-700">세로선 (구분선)</span>
                   </button>
                 </div>
                 <p className="text-[0.65rem] text-red-500 mt-2 font-bold text-center">💡 CTRL(CMD) 키를 누르고 드래그하면 복사됩니다.</p>
@@ -852,8 +861,6 @@
                       const reader = new FileReader();
                       reader.onload = (event) => {
                         const base64 = event.target.result;
-                        
-                        // ★ 이미지 자동 변환(누끼) 로직 제거 -> 원본 화질 그대로 배경으로 바로 적용
                         setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: base64 } : p));
                       };
                       reader.readAsDataURL(file);
@@ -873,17 +880,6 @@
                 <p className="text-[0.6rem] text-gray-500 mt-2 leading-tight">
                   ※ 업로드된 평면도 이미지가 <b>원본 화질 그대로</b> 캔버스 배경에 선명하게 적용됩니다.
                 </p>
-              </div>
-
-              {/* 노출 수준 범례 패널 */}
-              <div className="p-4">
-                <h2 className="text-sm font-bold text-gray-800 mb-2">노출 수준 범례</h2>
-                <div className="space-y-1.5 text-xs">
-                  <div className="flex items-center"><span className="w-4 h-4 bg-[#22c55e] inline-block mr-2 border border-black/10"></span> 10% 미만</div>
-                  <div className="flex items-center"><span className="w-4 h-4 bg-[#eab308] inline-block mr-2 border border-black/10"></span> 10~50% 미만(소음 80이상, 고열 23℃이상)</div>
-                  <div className="flex items-center"><span className="w-4 h-4 bg-[#f97316] inline-block mr-2 border border-black/10"></span> 50~100% 이하(소음 85이상, 고열 25℃이상)</div>
-                  <div className="flex items-center"><span className="w-4 h-4 bg-[#ef4444] inline-block mr-2 border border-black/10"></span> 노출기준 초과</div>
-                </div>
               </div>
             </div>
           </div>
@@ -997,10 +993,12 @@
                       let bgColor = el.baseColor || 'transparent';
                       let borderColor = '#1f2937';
                       let borderStyle = 'solid';
-                      let borderWidth = '2px';
+                      // ★ 도면 선 굵기 1.5px 로 얇고 샤프하게 조정
+                      let borderWidth = '1.5px'; 
 
                       if (isProcessNode) {
-                        bgColor = isLinked ? 'rgba(255, 255, 255, 0.95)' : '#e5e7eb';
+                        // ★ 원형 포인트를 포함한 3단 도형은 무조건 흰색 내부 유지
+                        bgColor = '#ffffff';
                         if (el.type === 'border-rect') {
                           bgColor = 'transparent';
                           borderColor = '#000000';
@@ -1009,7 +1007,7 @@
                         bgColor = '#000000'; 
                         borderStyle = 'none';
                         borderWidth = '0px';
-                      } else if (el.type === 'text') {
+                      } else if (el.type === 'text' || el.type === 'text-red' || el.type === 'company-name') {
                         bgColor = 'transparent'; 
                         borderStyle = 'none';
                         borderWidth = '0px';
@@ -1043,14 +1041,14 @@
                             <div className="w-full h-full flex flex-col items-stretch justify-between">
                               
                               <div 
-                                className="w-full flex items-start justify-center text-center font-bold text-gray-900 border-b border-gray-400 px-1 shrink-0 overflow-hidden"
-                                style={{ flex: `0 0 ${el.row1Ratio ?? 30}%`, fontSize: `${el.fontSize || 14}px`, wordBreak: 'keep-all', backgroundColor: el.type === 'border-rect' ? 'transparent' : '#f3f4f6' }}
+                                className="w-full flex items-start justify-center text-center font-normal text-gray-900 border-b border-gray-400 px-1 shrink-0 overflow-hidden"
+                                style={{ flex: `0 0 ${el.row1Ratio ?? 30}%`, fontSize: `${el.fontSize || 14}px`, wordBreak: 'keep-all', backgroundColor: el.type === 'border-rect' ? 'transparent' : '#ffffff' }}
                               >
                                 <span className="block w-full pt-[1px] pb-[8px] leading-[1.1]">{String(el.text)}</span>
                               </div>
                               
                               <div 
-                                className="w-full flex items-start justify-center text-center font-bold text-[#ff0000] border-b border-gray-300 px-1 shrink-0 overflow-hidden"
+                                className="w-full flex items-start justify-center text-center font-normal text-[#ff0000] border-b border-gray-300 px-1 shrink-0 overflow-hidden"
                                 style={{ flex: `0 0 ${el.row2Ratio ?? 20}%`, fontSize: `${Math.max(8, (el.fontSize || 14) * 0.75)}px`, wordBreak: 'break-all', backgroundColor: el.type === 'border-rect' ? 'transparent' : '#ffffff' }}
                               >
                                 <span className="block w-full pt-[1px] pb-[8px] leading-[1.1]">
@@ -1072,7 +1070,7 @@
                                       <div 
                                         key={cat}
                                         title={String(style.displayText)}
-                                        className={`flex-1 w-full flex items-start justify-center px-1 font-bold border-t border-white/20 ${String(style.text)} overflow-hidden`} 
+                                        className={`flex-1 w-full flex items-start justify-center px-1 font-normal border-t border-white/20 ${String(style.text)} overflow-hidden`} 
                                         style={{ 
                                           backgroundColor: String(style.bg),
                                           fontSize: `${Math.max(8, (el.fontSize || 14) * 0.65)}px`,
@@ -1089,8 +1087,14 @@
                             ) : (
                               !isLine && (
                                 <span 
-                                  className="text-center font-bold text-gray-900 px-1 whitespace-pre-wrap block w-full pt-[1px] pb-[8px] leading-[1.1]"
-                                  style={{ fontSize: `${el.fontSize || 14}px`, color: el.type === 'door' ? 'transparent' : 'inherit', wordBreak: 'keep-all' }}
+                                  className="text-center font-normal px-1 whitespace-pre-wrap block w-full pt-[1px] pb-[8px] leading-[1.1]"
+                                  style={{ 
+                                    fontSize: `${el.fontSize || 14}px`, 
+                                    color: el.type === 'door' ? 'transparent' : 
+                                           el.type === 'text-red' ? '#ff0000' : 
+                                           el.type === 'company-name' ? '#2563eb' : '#111827',
+                                    wordBreak: 'keep-all' 
+                                  }}
                                 >
                                   {String(el.text)}
                                 </span>
@@ -1109,19 +1113,21 @@
                     })}
                   </div>
 
-                  {/* --- 푸터 --- */}
+                  {/* --- 푸터 (범례 조건부 렌더링) --- */}
                   <div className="flex flex-col justify-end z-20 shrink-0 mt-2 overflow-visible">
-                    <div className="text-gray-900 font-bold flex flex-col gap-1.5 w-full" style={{ fontSize: '0.75rem' }}>
+                    <div className="text-gray-900 font-semibold flex flex-col gap-1.5 w-full" style={{ fontSize: '0.75rem' }}>
                       <p className="whitespace-normal break-keep">※ 측정대상 부서의 평면도를 그리고 단위작업장소별 측정위치를 표시한다.</p>
                       <p className="whitespace-normal break-keep">※ 측정점 용어설명 - N(Noise) : 소음, P(Particulates:Dust,Mist,Fume etc) : 분진류, S(Solvents) : 유기화합물, M(Metals) : 금속류, G(Gas) : 가스류, A(Acids) : 산·알카리류</p>
                       
-                      <div className="flex flex-nowrap justify-start items-center w-full pt-1 gap-x-3 overflow-visible whitespace-nowrap" style={{ fontSize: '0.62rem', letterSpacing: '-0.02em' }}>
-                        <span className="shrink-0 font-extrabold pr-1">※ 노출 수준 범례 -</span>
-                        <span className="flex items-center"><span className="w-3 h-3 bg-[#22c55e] inline-block mr-1 border border-black/20"></span>10% 미만</span>
-                        <span className="flex items-center"><span className="w-3 h-3 bg-[#eab308] inline-block mr-1 border border-black/20"></span>10~50% 미만(소음 80이상, 고열 23℃이상)</span>
-                        <span className="flex items-center"><span className="w-3 h-3 bg-[#f97316] inline-block mr-1 border border-black/20"></span>50~100% 이하(소음 85이상, 고열 25℃이상)</span>
-                        <span className="flex items-center"><span className="w-3 h-3 bg-[#ef4444] inline-block mr-1 border border-black/20"></span>노출기준 초과</span>
-                      </div>
+                      {showLegend && (
+                        <div className="flex flex-nowrap justify-start items-center w-full pt-1 gap-x-3 overflow-visible whitespace-nowrap" style={{ fontSize: '0.62rem', letterSpacing: '-0.02em' }}>
+                          <span className="shrink-0 font-extrabold pr-1">※ 노출 수준 범례 -</span>
+                          <span className="flex items-center"><span className="w-3 h-3 bg-[#22c55e] inline-block mr-1 border border-black/20"></span>10% 미만</span>
+                          <span className="flex items-center"><span className="w-3 h-3 bg-[#eab308] inline-block mr-1 border border-black/20"></span>10~50% 미만(소음 80이상, 고열 23℃이상)</span>
+                          <span className="flex items-center"><span className="w-3 h-3 bg-[#f97316] inline-block mr-1 border border-black/20"></span>50~100% 이하(소음 85이상, 고열 25℃이상)</span>
+                          <span className="flex items-center"><span className="w-3 h-3 bg-[#ef4444] inline-block mr-1 border border-black/20"></span>노출기준 초과</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1163,13 +1169,40 @@
                 {/* 텍스트 설정 */}
                 {(selectedElement.type !== 'line-h' && selectedElement.type !== 'line-v') && (
                   <div className="border-t border-gray-200 pt-4">
-                    <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">표시 텍스트 (공정명)</h3>
+                    <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">
+                      표시 텍스트 
+                      {selectedElement.type === 'text-red' && <span className="text-red-500"> (기호)</span>}
+                      {selectedElement.type === 'company-name' && <span className="text-blue-500"> (사업체명)</span>}
+                    </h3>
                     <textarea 
                       value={selectedElement.text} 
-                      onChange={e => updateSelectedElement({ text: e.target.value })}
-                      className="w-full text-sm p-2 border rounded resize-none focus:ring-1 focus:ring-blue-500"
+                      onChange={e => {
+                        let val = e.target.value;
+                        if (selectedElement.type === 'text-red') {
+                          const inputType = e.nativeEvent?.inputType;
+                          const data = e.nativeEvent?.data;
+                          
+                          if (inputType !== 'deleteContentBackward' && inputType !== 'deleteContentForward') {
+                            if (val.length === 1 && val !== '*') {
+                                val = '*' + val;
+                            }
+                            if (data === ',') {
+                              const cursor = e.target.selectionStart;
+                              if (cursor > 0 && val[cursor - 1] === ',') {
+                                val = val.slice(0, cursor) + ' *' + val.slice(cursor);
+                              }
+                            }
+                          }
+                        }
+                        updateSelectedElement({ text: val });
+                      }}
+                      className={`w-full text-sm p-2 border rounded resize-none focus:ring-1 focus:ring-blue-500 ${selectedElement.type === 'text-red' ? 'text-red-600 font-semibold bg-red-50' : selectedElement.type === 'company-name' ? 'text-blue-600 font-semibold bg-blue-50' : ''}`}
                       rows="2"
                     />
+                    
+                    {selectedElement.type === 'text-red' && (
+                      <p className="text-[0.6rem] text-red-500 mt-1 leading-tight">※ 쉼표(,)를 입력하면 자동으로 '*' 기호가 붙습니다.</p>
+                    )}
                     
                     {(selectedElement.type === 'rect' || selectedElement.type === 'circle' || selectedElement.type === 'border-rect') && (
                       <div className="mt-3">
