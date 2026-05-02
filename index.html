@@ -122,8 +122,49 @@
       const [activePageId, setActivePageId] = useState('page-1');
       const [selectedElementId, setSelectedElementId] = useState(null);
 
+      // ★ 작업 내역 저장을 위한 History (Undo/Redo) 상태
+      const [past, setPast] = useState([]);
+      const [future, setFuture] = useState([]);
+
       const fileInputRef = useRef(null);
 
+      // --- Undo/Redo 핵심 로직 ---
+      const pushHistory = useCallback((currentPages) => {
+        setPast(prev => [...prev, currentPages]);
+        setFuture([]); // 새로운 액션이 발생하면 미래(Redo) 기록은 삭제
+      }, []);
+
+      const undo = useCallback(() => {
+        if (past.length === 0) return;
+        const previous = past[past.length - 1];
+        const newPast = past.slice(0, past.length - 1);
+        
+        setPast(newPast);
+        setFuture([pages, ...future]);
+        setPages(previous);
+        
+        if (!previous.find(p => p.id === activePageId)) {
+          setActivePageId(previous[0].id);
+          setSelectedElementId(null);
+        }
+      }, [past, future, pages, activePageId]);
+
+      const redo = useCallback(() => {
+        if (future.length === 0) return;
+        const next = future[0];
+        const newFuture = future.slice(1);
+        
+        setFuture(newFuture);
+        setPast([...past, pages]);
+        setPages(next);
+
+        if (!next.find(p => p.id === activePageId)) {
+          setActivePageId(next[0].id);
+          setSelectedElementId(null);
+        }
+      }, [past, future, pages, activePageId]);
+
+      // --- 추출된 Row 데이터를 통합 규격으로 파싱하는 공통 함수 ---
       const processParsedRows = (rows, type) => {
         return rows.map(row => {
           const compKey = findKey(row, ['사업장', '사업체', '회사']);
@@ -169,6 +210,7 @@
         }).filter(d => d && d.hasData && d.agent !== '미상' && !d.isExcluded);
       };
 
+      // --- 데이터 로드 및 분석 ---
       const fetchAndParse = (urlStr, type) => {
         if (!urlStr || typeof urlStr !== 'string') return Promise.resolve([]);
 
@@ -376,6 +418,8 @@
       const generateId = () => Math.random().toString(36).substr(2, 9);
 
       const addElement = (type) => {
+        pushHistory(pages); // 추가 전 상태 저장
+        
         let w = 150, h = 120, text = '공정명', baseColor = '#ffffff';
         if (type === 'door') { w = 50; h = 10; text = ''; baseColor = '#000000'; }
         else if (type === 'rect') { w = 180; text = '공정명'; }
@@ -413,12 +457,31 @@
       };
 
       const addPage = () => {
+        pushHistory(pages); // 페이지 추가 전 상태 저장
         const newPageId = `page-${pages.length + 1}`;
         setPages([...pages, { id: newPageId, elements: [] }]);
         setActivePageId(newPageId);
       };
 
-      const updateElementDirectly = (targetId, updates) => {
+      // ★ 페이지 개별 삭제 기능
+      const deletePage = (id) => {
+        if (pages.length <= 1) {
+          alert('최소 1개의 페이지는 존재해야 합니다.');
+          return;
+        }
+        if (!window.confirm('이 페이지와 내부의 모든 도면을 삭제하시겠습니까?\n(Ctrl+Z로 복구 가능합니다)')) return;
+        
+        pushHistory(pages);
+        const newPages = pages.filter(p => p.id !== id);
+        setPages(newPages);
+        if (activePageId === id) {
+          setActivePageId(newPages[0].id);
+          setSelectedElementId(null);
+        }
+      };
+
+      const updateElementDirectly = (targetId, updates, saveHistoryFlag = true) => {
+        if (saveHistoryFlag) pushHistory(pages);
         setPages(prev => prev.map(p => {
           if (p.id === activePageId) {
             return {
@@ -430,13 +493,15 @@
         }));
       };
 
-      const updateSelectedElement = (updates) => {
+      const updateSelectedElement = (updates, saveHistoryFlag = true) => {
         if (selectedElementId) {
-          updateElementDirectly(selectedElementId, updates);
+          updateElementDirectly(selectedElementId, updates, saveHistoryFlag);
         }
       };
 
       const deleteSelectedElement = useCallback(() => {
+        if (!selectedElementId) return;
+        pushHistory(pages); // 삭제 전 상태 저장
         setPages(prev => prev.map(p => {
           if (p.id === activePageId) {
             return { ...p, elements: p.elements.filter(el => el.id !== selectedElementId) };
@@ -444,21 +509,42 @@
           return p;
         }));
         setSelectedElementId(null);
-      }, [activePageId, selectedElementId]);
+      }, [activePageId, selectedElementId, pages, pushHistory]);
 
+      // 단축키 (삭제, 실행취소, 다시실행) 핸들링
       useEffect(() => {
         const handleKeyDown = (e) => {
+          const activeTag = document.activeElement?.tagName;
+          const inInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag);
+
+          // 1. 삭제 (Delete / Backspace)
           if (e.key === 'Delete' || e.key === 'Backspace') {
-            const activeTag = document.activeElement?.tagName;
-            if (['INPUT', 'TEXTAREA', 'SELECT'].includes(activeTag)) return;
+            if (inInput) return; // 텍스트 입력창 내부에서는 삭제 방지
             if (selectedElementId) {
+              e.preventDefault();
               deleteSelectedElement();
+            }
+          }
+
+          // 2. Undo / Redo 단축키 (Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z)
+          if ((e.ctrlKey || e.metaKey) && !inInput) {
+            if (e.key.toLowerCase() === 'z') {
+              if (e.shiftKey) {
+                e.preventDefault();
+                redo();
+              } else {
+                e.preventDefault();
+                undo();
+              }
+            } else if (e.key.toLowerCase() === 'y') {
+              e.preventDefault();
+              redo();
             }
           }
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-      }, [selectedElementId, deleteSelectedElement]);
+      }, [selectedElementId, deleteSelectedElement, undo, redo]);
 
       const handlePrint = () => window.print();
 
@@ -568,7 +654,7 @@
           orientation,
           activeCategories,
           urls,
-          showLegend // 범례 설정값도 JSON에 함께 저장
+          showLegend 
         };
         const blob = new Blob([JSON.stringify(dataToSave)], {type: "application/json"});
         const link = document.createElement('a');
@@ -592,8 +678,12 @@
             if (data.orientation) setOrientation(data.orientation);
             if (data.activeCategories) setActiveCategories(data.activeCategories);
             if (data.urls) setUrls(data.urls);
-            if (data.showLegend !== undefined) setShowLegend(data.showLegend); // 범례 상태 복원
+            if (data.showLegend !== undefined) setShowLegend(data.showLegend); 
             
+            // 데이터 로드 시 History 초기화
+            setPast([]);
+            setFuture([]);
+
             setPages(prevPages => prevPages.map(page => ({
               ...page,
               elements: page.elements.map(el => ({
@@ -617,9 +707,11 @@
       const dragOffset = useRef({ x: 0, y: 0 });
       const resizeRef = useRef({ startW: 0, startH: 0, startX: 0, startY: 0 });
       const dragTargetIdRef = useRef(null);
+      const pagesBeforeDrag = useRef(null);
 
       const onPointerDown = (e, elId) => {
         e.stopPropagation();
+        pagesBeforeDrag.current = pages; // 드래그/리사이즈 시작 시점의 전체 상태 백업
         
         const page = pages.find(p => p.id === activePageId);
         const el = page?.elements.find(e => e.id === elId);
@@ -641,6 +733,7 @@
             y: el.y + 15 
           };
           
+          pushHistory(pages); // 복사 전 상태 저장
           setPages(prev => prev.map(p => {
             if (p.id === activePageId) return { ...p, elements: [...p.elements, newEl] };
             return p;
@@ -658,6 +751,7 @@
 
       const onResizeDown = (e, el) => {
         e.stopPropagation();
+        pagesBeforeDrag.current = pages; // 상태 백업
         setSelectedElementId(el.id);
         dragTargetIdRef.current = el.id;
         setIsResizing(true);
@@ -682,7 +776,8 @@
           let newW = Math.max(1, resizeRef.current.startW + dx);
           let newH = Math.max(1, resizeRef.current.startH + dy);
 
-          updateElementDirectly(targetId, { w: newW, h: newH });
+          // 이동/크기 조절 중에는 무수히 렌더링되므로 History를 저장하지 않음(false 전달)
+          updateElementDirectly(targetId, { w: newW, h: newH }, false);
           return;
         }
 
@@ -691,14 +786,21 @@
           let newX = e.clientX - parentRect.left - dragOffset.current.x;
           let newY = e.clientY - parentRect.top - dragOffset.current.y;
           
-          updateElementDirectly(targetId, { x: newX, y: newY });
+          updateElementDirectly(targetId, { x: newX, y: newY }, false);
         }
       }, [isDragging, isResizing, activePageId, pages]);
 
       const onPointerUp = useCallback(() => {
+        // 드래그 또는 리사이즈가 종료되는 시점에, 시작점과 비교하여 변경되었으면 과거(Past)에 삽입
+        if ((isDragging || isResizing) && pagesBeforeDrag.current) {
+          if (pagesBeforeDrag.current !== pages) {
+            pushHistory(pagesBeforeDrag.current);
+          }
+        }
         setIsDragging(false);
         setIsResizing(false);
-      }, []);
+        pagesBeforeDrag.current = null;
+      }, [isDragging, isResizing, pages, pushHistory]);
 
       useEffect(() => {
         if (isDragging || isResizing) {
@@ -782,7 +884,7 @@
                   ))}
                 </div>
                 
-                {/* ★ 하단 노출 수준 범례 토글 스위치 */}
+                {/* 하단 노출 수준 범례 토글 스위치 */}
                 <div className="pt-3 border-t border-gray-200">
                   <label className="flex items-center space-x-2 cursor-pointer">
                     <input type="checkbox" checked={showLegend} onChange={(e) => setShowLegend(e.target.checked)} className="rounded text-blue-600 focus:ring-blue-500" />
@@ -814,7 +916,6 @@
                     <div className="w-6 h-6 border-[1.5px] border-gray-600 bg-transparent"></div>
                     <span className="text-xs font-semibold text-gray-700">투명 공정 (3단표)</span>
                   </button>
-                  {/* 사업체명 입력 전용 도형 */}
                   <button onClick={() => addElement('company-name')} className="p-2 border border-blue-300 rounded hover:bg-blue-50 flex flex-col items-center justify-center gap-1 transition bg-blue-50/30">
                     <div className="w-12 h-5 flex items-center justify-center text-[0.45rem] font-semibold text-blue-600 tracking-tighter">&lt;0000&gt;</div>
                     <span className="text-xs font-semibold text-blue-700">사업체명 도형</span>
@@ -861,6 +962,7 @@
                       const reader = new FileReader();
                       reader.onload = (event) => {
                         const base64 = event.target.result;
+                        pushHistory(pages); // 업로드 전 히스토리 저장
                         setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: base64 } : p));
                       };
                       reader.readAsDataURL(file);
@@ -872,7 +974,10 @@
                     이미지 원본 업로드
                   </button>
                   {pages.find(p => p.id === activePageId)?.bgImage && (
-                    <button onClick={() => setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: null } : p))} className="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-bold py-1.5 rounded transition flex justify-center items-center mt-1">
+                    <button onClick={() => {
+                      pushHistory(pages); // 삭제 전 히스토리 저장
+                      setPages(prev => prev.map(p => p.id === activePageId ? { ...p, bgImage: null } : p));
+                    }} className="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 text-xs font-bold py-1.5 rounded transition flex justify-center items-center mt-1">
                       배경 삭제
                     </button>
                   )}
@@ -891,17 +996,39 @@
             <div className="w-full h-14 bg-white border-b border-gray-300 flex items-center justify-between px-4 shadow-sm z-10 no-print">
               <div className="flex items-center gap-2">
                 <div className="flex bg-gray-100 p-1 rounded-lg items-center">
+                  {/* ★ 페이지 리스트 및 개별 삭제 버튼 UI */}
                   {pages.map((p, idx) => (
-                    <button 
-                      key={p.id} 
-                      onClick={() => { setActivePageId(p.id); setSelectedElementId(null); }}
-                      className={`px-3 py-1 text-xs font-bold rounded-md transition ${activePageId === p.id ? 'bg-white shadow text-blue-700' : 'text-gray-600 hover:bg-gray-200'}`}
-                    >
-                      Page {idx + 1}
-                    </button>
+                    <div key={p.id} className="relative flex items-center group">
+                      <button 
+                        onClick={() => { setActivePageId(p.id); setSelectedElementId(null); }}
+                        className={`px-3 py-1 text-xs font-bold rounded-md transition ${activePageId === p.id ? 'bg-white shadow text-blue-700' : 'text-gray-600 hover:bg-gray-200'}`}
+                      >
+                        Page {idx + 1}
+                      </button>
+                      {/* 2개 이상의 페이지가 있을 때 현재 활성화된 페이지 우측에 삭제 버튼 표시 */}
+                      {pages.length > 1 && activePageId === p.id && (
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); deletePage(p.id); }}
+                          className="absolute -top-1 -right-1 bg-red-500 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center text-[9px] hover:bg-red-600 shadow-sm"
+                          title="이 페이지 삭제"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   ))}
-                  <button onClick={addPage} className="px-2 py-1 text-xs font-bold text-gray-600 hover:bg-gray-200 rounded-md ml-1 flex items-center">
+                  <button onClick={addPage} className="px-2 py-1 text-xs font-bold text-gray-600 hover:bg-gray-200 rounded-md ml-1 flex items-center" title="페이지 추가">
                     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 4v16m8-8H4"></path></svg>
+                  </button>
+                </div>
+
+                {/* ★ Undo / Redo 컨트롤 버튼 */}
+                <div className="flex items-center gap-1 border-l pl-2 ml-2 border-gray-300">
+                  <button onClick={undo} disabled={past.length === 0} className={`p-1.5 rounded transition ${past.length > 0 ? 'text-gray-700 hover:bg-gray-200' : 'text-gray-300'}`} title="실행 취소 (Ctrl+Z)">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
+                  </button>
+                  <button onClick={redo} disabled={future.length === 0} className={`p-1.5 rounded transition ${future.length > 0 ? 'text-gray-700 hover:bg-gray-200' : 'text-gray-300'}`} title="다시 실행 (Ctrl+Y)">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 10h-10a8 8 0 00-8 8v2M21 10l-6 6m6-6l-6-6"></path></svg>
                   </button>
                 </div>
                 
@@ -993,11 +1120,9 @@
                       let bgColor = el.baseColor || 'transparent';
                       let borderColor = '#1f2937';
                       let borderStyle = 'solid';
-                      // ★ 도면 선 굵기 1.5px 로 얇고 샤프하게 조정
                       let borderWidth = '1.5px'; 
 
                       if (isProcessNode) {
-                        // ★ 원형 포인트를 포함한 3단 도형은 무조건 흰색 내부 유지
                         bgColor = '#ffffff';
                         if (el.type === 'border-rect') {
                           bgColor = 'transparent';
@@ -1194,7 +1319,7 @@
                             }
                           }
                         }
-                        updateSelectedElement({ text: val });
+                        updateSelectedElement({ text: val }); // 프로퍼티 패널 수정 시에도 Undo 기록 반영됨
                       }}
                       className={`w-full text-sm p-2 border rounded resize-none focus:ring-1 focus:ring-blue-500 ${selectedElement.type === 'text-red' ? 'text-red-600 font-semibold bg-red-50' : selectedElement.type === 'company-name' ? 'text-blue-600 font-semibold bg-blue-50' : ''}`}
                       rows="2"
