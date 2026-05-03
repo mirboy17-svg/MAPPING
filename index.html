@@ -1202,7 +1202,7 @@
                               </div>
                               
                               <div 
-                                className="w-full flex items-start justify-center text-center font-normal text-[#ff0000] border-b border-gray-300 px-1 shrink-0 overflow-hidden"
+                                className="w-full flex items-start justify-center text-center font-bold text-[#ff0000] border-b border-gray-300 px-1 shrink-0 overflow-hidden"
                                 style={{ flex: `0 0 ${el.row2Ratio ?? 20}%`, fontSize: `${Math.max(8, (el.fontSize || 14) * 0.75)}px`, wordBreak: 'break-all', backgroundColor: el.type === 'border-rect' ? 'transparent' : '#ffffff' }}
                               >
                                 <span 
@@ -1254,7 +1254,7 @@
                                   onBlur={(e) => updateElementDirectly(el.id, { text: e.currentTarget.innerText })}
                                   onPointerDown={handleTextPointerDown}
                                   onPaste={handlePastePlainText}
-                                  className={`text-center font-normal px-1 whitespace-pre-wrap block w-full pt-[1px] pb-[8px] leading-[1.1] outline-none ${isSelected && el.type !== 'door' ? 'cursor-text' : ''}`}
+                                  className={`text-center ${el.type === 'text-red' || el.type === 'company-name' ? 'font-bold' : 'font-normal'} px-1 whitespace-pre-wrap block w-full pt-[1px] pb-[8px] leading-[1.1] outline-none ${isSelected && el.type !== 'door' ? 'cursor-text' : ''}`}
                                   style={{ 
                                     fontSize: `${el.fontSize || 14}px`, 
                                     color: el.type === 'door' ? 'transparent' : 
